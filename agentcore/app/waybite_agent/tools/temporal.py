@@ -28,22 +28,8 @@ def verify_temporal_safety(
     close_time_str: Optional[str] = "21:00",
     min_dining_duration_min: int = 30,
 ) -> Dict[str, Any]:
-    """Verify temporal safety of visiting a restaurant given departure time, travel ETA, break times, and last order cutoffs.
-
-    Args:
-        place_id: Unique identifier for the restaurant
-        place_name: Name of the restaurant
-        travel_time_from_origin_min: Travel time from origin to restaurant in minutes
-        departure_time_str: Departure time in HH:MM (e.g., '13:30'). Defaults to current time if None.
-        break_start_time_str: Afternoon break start time in HH:MM (e.g., '15:00')
-        break_end_time_str: Afternoon break end time in HH:MM (e.g., '17:00')
-        last_order_time_str: Lunch last order cutoff time in HH:MM (e.g., '14:30')
-        close_time_str: Evening closing time in HH:MM (e.g., '21:00')
-        min_dining_duration_min: Minimum required minutes for comfortable dining (default: 30)
-
-    Returns:
-        Validation result with safety_status ('SAFE', 'TIGHT', 'REJECTED'), badge_message, and time margins.
-    """
+    """Verify temporal safety of visiting a restaurant given departure time, travel ETA, break times, and last order cutoffs."""
+    print(f"\n🔥 [REAL PYTHON TOOL EXECUTED] verify_temporal_safety(place={place_name}, travel_time={travel_time_from_origin_min}m, dep={departure_time_str})")
     now = datetime.now()
     if departure_time_str:
         dep_time = _parse_time(departure_time_str) or now

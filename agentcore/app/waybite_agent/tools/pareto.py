@@ -12,18 +12,8 @@ def rank_pareto_dining(
     alpha_detour_weight: float = 0.5,
     max_top_k: int = 3,
 ) -> Dict[str, Any]:
-    """Calculate multi-objective Pareto ranking balancing detour penalty against food rating and temporal safety.
-
-    Args:
-        candidates: List of restaurant candidate dictionaries
-        temporal_verdicts: List of temporal validation dictionaries from verify_temporal_safety
-        review_metrics: Dictionary of review metrics per place_id from query_pinecone_reviews
-        alpha_detour_weight: User preference slider (0.0 = prioritize maximum food quality, 1.0 = prioritize minimal detour time)
-        max_top_k: Number of recommendations to return (default: 3)
-
-    Returns:
-        Ranked list of recommendations with calculated final scores, detour metrics, and safety badges.
-    """
+    """Calculate multi-objective Pareto ranking balancing detour penalty against food rating and temporal safety."""
+    print(f"\n🔥 [REAL PYTHON TOOL EXECUTED] rank_pareto_dining(candidates={len(candidates)}, alpha={alpha_detour_weight}, max_k={max_top_k})")
     safety_map = {v["place_id"]: v for v in temporal_verdicts}
     review_map = review_metrics.get("results", {})
 

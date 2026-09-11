@@ -78,16 +78,8 @@ def query_pinecone_reviews(
     query_intent: str = "빠른 조리, 혼밥 적합도, 주차 편의성",
     top_k: int = 3,
 ) -> Dict[str, Any]:
-    """Query Pinecone Serverless vector index to retrieve unstructured review sentiments and aspect scores.
-
-    Args:
-        place_ids: List of place IDs to inspect and score
-        query_intent: Semantic search query describing desired dining vibe/requirements
-        top_k: Number of relevant snippets to retrieve per restaurant
-
-    Returns:
-        Structured review mining scores (cooking speed, solo dining, parking) and evidence snippets.
-    """
+    """Query Pinecone Serverless vector index to retrieve unstructured review sentiments and aspect scores."""
+    print(f"\n🔥 [REAL PYTHON TOOL EXECUTED] query_pinecone_reviews(places={place_ids}, intent='{query_intent}')")
     api_key = os.environ.get("PINECONE_API_KEY")
     index_name = os.environ.get("PINECONE_INDEX_NAME", "waybite-reviews")
 
