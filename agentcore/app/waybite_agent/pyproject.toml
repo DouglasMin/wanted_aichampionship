@@ -14,7 +14,8 @@ dependencies = [
     "botocore[crt] >= 1.35.0",
     "mcp >= 1.19.0",
     "strands-agents >= 1.13.0",
-    "pinecone-client >= 6.0.0",
+    "pinecone >= 5.0.0",
+    "python-dotenv >= 1.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

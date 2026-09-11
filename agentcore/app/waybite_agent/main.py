@@ -1,4 +1,8 @@
 from typing import Any
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from strands import Agent, tool
 from bedrock_agentcore.runtime import BedrockAgentCoreApp

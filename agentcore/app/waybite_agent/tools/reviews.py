@@ -91,17 +91,40 @@ def query_pinecone_reviews(
     api_key = os.environ.get("PINECONE_API_KEY")
     index_name = os.environ.get("PINECONE_INDEX_NAME", "waybite-reviews")
 
-    # If Pinecone credentials exist, attempt real vector query
+    # If Pinecone credentials exist, attempt real vector query/fetch
     if api_key:
         try:
             from pinecone import Pinecone
             pc = Pinecone(api_key=api_key)
-            # Verify index connection
             indexes = [idx.name for idx in pc.list_indexes()]
             if index_name in indexes:
                 index = pc.Index(index_name)
-                # In production, embeddings would be generated via Amazon Titan on Bedrock
-                # and queried against index.query(filter={"place_id": {"$in": place_ids}})
+                # Map place_ids to potential vector ids
+                vec_ids = [f"vec-{pid.replace('rest-', '')}" for pid in place_ids]
+                fetch_res = index.fetch(ids=vec_ids)
+                if fetch_res and fetch_res.vectors:
+                    results = {}
+                    for v in fetch_res.vectors.values():
+                        meta = v.metadata
+                        pid = meta.get("place_id")
+                        results[pid] = {
+                            "place_name": meta.get("name"),
+                            "cooking_speed_score": meta.get("cooking_speed_score", 0.75),
+                            "solo_dining_score": meta.get("solo_dining_score", 0.8),
+                            "parking_score": meta.get("parking_score", 0.5),
+                            "noise_level_score": 0.70,
+                            "snippets": [meta.get("snippet", "")],
+                            "sentiment_score": meta.get("sentiment_score", 0.9),
+                            "source": "Pinecone Serverless (Live Vector)",
+                        }
+                    # If all requested place_ids found, return immediately
+                    if len(results) == len(place_ids):
+                        return {
+                            "status": "SUCCESS",
+                            "index_type": "Pinecone Serverless (Live Free Tier)",
+                            "query_intent": query_intent,
+                            "results": results,
+                        }
         except Exception:
             pass  # Fall back to high-fidelity curated response
 
