@@ -1,0 +1,12 @@
+aws_region   = "us-east-1"
+aws_profile  = "developer-dongik"
+project_name = "waybite"
+environment  = "dev"
+
+# External API Keys (Fill in with your actual keys)
+kakao_rest_api_key    = "YOUR_KAKAO_REST_API_KEY"
+odsay_api_key         = "YOUR_ODSAY_API_KEY"
+tmap_api_key          = "YOUR_TMAP_API_KEY"
+google_places_api_key = "YOUR_GOOGLE_PLACES_API_KEY"
+pinecone_api_key      = "YOUR_PINECONE_API_KEY"
+pinecone_index_name   = "waybite-reviews"
