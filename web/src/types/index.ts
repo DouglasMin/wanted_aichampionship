@@ -1,5 +1,21 @@
 export type TransportMode = "CAR" | "TRANSIT" | "BICYCLE" | "WALK";
 
+export type AppScreen = "setup" | "result";
+
+export interface LocationPoint {
+  name: string;
+  lat: number;
+  lng: number;
+}
+
+export interface RouteConfig {
+  origin: LocationPoint;
+  destination: LocationPoint;
+  departureTime: string; // "오늘 오후 6:30" display string
+  mode: TransportMode;
+  naturalQuery: string;
+}
+
 export interface Restaurant {
   id: string;
   placeId: string;
