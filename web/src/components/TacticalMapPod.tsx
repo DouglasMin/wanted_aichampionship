@@ -34,11 +34,11 @@ function tryLoadKakao(): Promise<boolean> {
     const script = document.createElement("script");
     script.type = "text/javascript";
     script.src =
-      "https://dapi.kakao.com/v2/maps/sdk.js?appkey=1b8a016f0232babcf72db2781d663053&autoload=false&libraries=services,clusterer";
+      "https://dapi.kakao.com/v2/maps/sdk.js?appkey=c7cfb946312c9c7c4acad51eac65eb1b&autoload=false&libraries=services,clusterer";
 
     const timeout = setTimeout(() => {
       resolve(false);
-    }, 1500);
+    }, 4000);
 
     script.onload = () => {
       clearTimeout(timeout);

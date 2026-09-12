@@ -6,9 +6,41 @@ import requests
 from strands import tool
 
 
-def _geocode_place(query: str, headers: dict) -> Optional[Dict[str, Any]]:
-    """Geocode a location query to lng/lat using Kakao Local API."""
-    url = f"https://dapi.kakao.com/v2/local/search/keyword.json?query={query}&size=1"
+import re
+
+
+def _extract_coords(text: str) -> Optional[tuple]:
+    """Extract (lat, lng) from a text string if present."""
+    if not text:
+        return None
+    # Lat in Korea: 33.x ~ 38.x
+    # Lng in Korea: 126.x ~ 129.x
+    lat_m = re.search(r'(?:위도|lat|latitude)?\s*[:=]?\s*([3][3-8]\.\d{3,})', text, re.IGNORECASE)
+    lng_m = re.search(r'(?:경도|lng|longitude)?\s*[:=]?\s*([1][2][6-9]\.\d{3,})', text, re.IGNORECASE)
+    if lat_m and lng_m:
+        return float(lat_m.group(1)), float(lng_m.group(1))
+    return None
+
+
+def _geocode_place(query: str, headers: dict, ref_lng: Optional[float] = None, ref_lat: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """Geocode a location query to lng/lat using coordinates in text or Kakao Local API."""
+    coords = _extract_coords(query)
+    if coords:
+        clean_name = re.sub(r'\(.*?\)', '', query).strip() or query
+        return {
+            "name": clean_name,
+            "lng": coords[1],
+            "lat": coords[0],
+            "address": "",
+        }
+
+    clean_query = query.strip()
+    # Bias search toward reference point (e.g. origin) so common names like '대림아파트' resolve to the local one
+    if ref_lng is not None and ref_lat is not None:
+        url = f"https://dapi.kakao.com/v2/local/search/keyword.json?query={clean_query}&x={ref_lng}&y={ref_lat}&sort=distance&size=1"
+    else:
+        url = f"https://dapi.kakao.com/v2/local/search/keyword.json?query={clean_query}&size=1"
+
     try:
         resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
@@ -64,8 +96,8 @@ def plan_corridor(
     """Search for real-time travel corridor route and retrieve actual restaurant candidates along the path using Kakao Mobility & Local API.
 
     Args:
-        origin: Departure location or coordinate (e.g., '판교역', '제주국제공항')
-        destination: Destination location or coordinate (e.g., '강남역', '신제주연동')
+        origin: Departure location or coordinate (e.g., '판교역', '제주국제공항', or '홍제역 (37.5896, 126.9436)')
+        destination: Destination location or coordinate (e.g., '강남역', '신제주연동', or '대림아파트 (37.5595, 126.9267)')
         transport_mode: Mode of transportation ('CAR', 'TRANSIT', 'WALK', 'BICYCLE')
         detour_budget_min: Maximum acceptable detour time in minutes (default: 15)
         corridor_radius_m: Search buffer radius from trajectory in meters (default: 1200)
@@ -82,9 +114,11 @@ def plan_corridor(
 
     headers = {"Authorization": f"KakaoAK {kakao_key}"}
 
-    # 1. Geocode origin and destination using real Kakao Local API
+    # 1. Geocode origin and destination using exact coordinates or biased Kakao Local API
     origin_geo = _geocode_place(origin, headers)
-    dest_geo = _geocode_place(destination, headers)
+    ref_x = origin_geo["lng"] if origin_geo else None
+    ref_y = origin_geo["lat"] if origin_geo else None
+    dest_geo = _geocode_place(destination, headers, ref_lng=ref_x, ref_lat=ref_y)
 
     if not origin_geo or not dest_geo:
         return {
@@ -109,15 +143,22 @@ def plan_corridor(
         base_distance_m = direct_route["distance_meters"]
         route_coords = direct_route.get("coordinates", [])
 
-    # 3. Calculate search midpoint along the corridor (or major transfer station)
-    mid_lng = (origin_geo["lng"] + dest_geo["lng"]) / 2.0
-    mid_lat = (origin_geo["lat"] + dest_geo["lat"]) / 2.0
+    # 3. Calculate search points along the real route corridor polyline
+    search_points = []
+    if route_coords and len(route_coords) >= 4:
+        for ratio in [0.25, 0.5, 0.75]:
+            idx = min(len(route_coords) - 1, int(len(route_coords) * ratio))
+            pt = route_coords[idx]  # [lat, lng]
+            search_points.append((pt[1], pt[0]))  # (lng, lat)
+        search_points.append((dest_geo["lng"], dest_geo["lat"]))
+    else:
+        mid_lng = (origin_geo["lng"] + dest_geo["lng"]) / 2.0
+        mid_lat = (origin_geo["lat"] + dest_geo["lat"]) / 2.0
+        if "판교" in origin and "강남" in destination:
+            mid_lng, mid_lat = 127.034164, 37.484576  # 양재역
+        search_points = [(mid_lng, mid_lat), (dest_geo["lng"], dest_geo["lat"]), (origin_geo["lng"], origin_geo["lat"])]
 
-    if "판교" in origin and "강남" in destination:
-        mid_lng, mid_lat = 127.034164, 37.484576  # 양재역
-
-    # 4. Search real restaurants around corridor center or destination if center yields none
-    search_points = [(mid_lng, mid_lat), (dest_geo["lng"], dest_geo["lat"]), (origin_geo["lng"], origin_geo["lat"])]
+    # 4. Search real restaurants around corridor route points
     docs = []
 
     for s_lng, s_lat in search_points:

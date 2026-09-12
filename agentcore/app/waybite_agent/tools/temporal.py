@@ -1,5 +1,4 @@
-"""Temporal safety guardrail tool to evaluate arrival ETA against operating hours."""
-
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from strands import tool
@@ -9,11 +8,31 @@ def _parse_time(time_str: Optional[str]) -> Optional[datetime]:
     if not time_str:
         return None
     now = datetime.now()
-    try:
-        parts = [int(p) for p in time_str.split(":")]
-        return now.replace(hour=parts[0], minute=parts[1], second=0, microsecond=0)
-    except Exception:
-        return None
+    time_str = str(time_str).strip()
+
+    # 1. Match standard HH:MM (e.g., "18:30", "09:15", "18:30 출발", "지금 출발 (18:30)")
+    match = re.search(r"(\d{1,2}):(\d{2})", time_str)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if ("오후" in time_str or "pm" in time_str.lower()) and hour < 12:
+            hour += 12
+        elif ("오전" in time_str or "am" in time_str.lower()) and hour == 12:
+            hour = 0
+        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # 2. Match Korean formatted time (e.g., "6시 30분", "오후 7시", "18시")
+    match_kr = re.search(r"(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?", time_str)
+    if match_kr:
+        hour = int(match_kr.group(1))
+        minute = int(match_kr.group(2)) if match_kr.group(2) else 0
+        if ("오후" in time_str or "pm" in time_str.lower()) and hour < 12:
+            hour += 12
+        elif ("오전" in time_str or "am" in time_str.lower()) and hour == 12:
+            hour = 0
+        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    return None
 
 
 def _evaluate_single_place(

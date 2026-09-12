@@ -26,10 +26,28 @@ export const SetupScreen = ({ onStartSearch }: SetupScreenProps) => {
   const [mode, setMode] = useState<TransportMode>("CAR");
   const [origin, setOrigin] = useState<LocationPoint | null>(null);
   const [destination, setDestination] = useState<LocationPoint | null>(null);
-  const [departureTime, setDepartureTime] = useState("지금 출발");
   const [queryText, setQueryText] = useState("");
-
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  /* ── Departure Time State & Helpers ────────────────── */
+  const [isNowSelected, setIsNowSelected] = useState(true);
+  const [customTime, setCustomTime] = useState(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  });
+
+  const handleSelectNow = () => {
+    const d = new Date();
+    const nowStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    setCustomTime(nowStr);
+    setIsNowSelected(true);
+  };
+
+  const handleTimeInputChange = (newTime: string) => {
+    if (!newTime) return;
+    setCustomTime(newTime);
+    setIsNowSelected(false);
+  };
 
   const canSubmit = origin && destination && !isSubmitting;
 
@@ -37,10 +55,14 @@ export const SetupScreen = ({ onStartSearch }: SetupScreenProps) => {
     if (!origin || !destination || isSubmitting) return;
     setIsSubmitting(true);
     const query = queryText.trim() || "퇴근길에 빨리 먹을 수 있는 맛집 추천해줘";
+    const departureTimeStr = isNowSelected
+      ? `지금 출발 (${customTime})`
+      : `${customTime} 출발`;
+
     onStartSearch({
       origin,
       destination,
-      departureTime,
+      departureTime: departureTimeStr,
       mode,
       naturalQuery: query,
     });
@@ -108,19 +130,33 @@ export const SetupScreen = ({ onStartSearch }: SetupScreenProps) => {
             icon={<MapPin size={16} style={{ color: "var(--accent-green)" }} />}
           />
 
-          {/* Departure Time */}
-          <div className="relative">
-            <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
-              <Clock size={16} style={{ color: "var(--text-muted)" }} />
+          {/* Departure Time — simple row */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSelectNow}
+              className={`shrink-0 px-4 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                isNowSelected
+                  ? "bg-[#e25822] text-white"
+                  : "bg-white/[0.04] text-[#8e95a5] border border-white/[0.06] hover:bg-white/[0.08]"
+              }`}
+            >
+              🚀 지금 출발
+            </button>
+
+            <div className="flex-1 relative">
+              <Clock
+                size={15}
+                className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#7d8699]"
+              />
+              <input
+                type="time"
+                value={customTime}
+                onChange={(e) => handleTimeInputChange(e.target.value)}
+                className="input-field w-full"
+                style={{ paddingLeft: "36px", fontSize: "14px" }}
+              />
             </div>
-            <input
-              type="text"
-              value={departureTime}
-              onChange={(e) => setDepartureTime(e.target.value)}
-              placeholder="출발 시각 (예: 오후 6:30)"
-              className="input-field"
-              style={{ paddingLeft: "44px" }}
-            />
           </div>
         </div>
 

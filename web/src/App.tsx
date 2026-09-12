@@ -10,6 +10,7 @@ import { TacticalMapPod } from "./components/TacticalMapPod";
 import {
   fetchRouteDirections,
   searchCorridorRestaurants,
+  minDistToRoute,
 } from "./lib/restaurantService";
 import { invokeAgentStream, mapToRestaurant } from "./lib/agentClient";
 import type { AppScreen, RouteConfig, ChatMessage, Restaurant } from "./types";
@@ -217,7 +218,45 @@ export function App() {
           routeConfig.origin,
           routeConfig.destination,
           matched,
-          routeConfig.mode
+          routeConfig.mode,
+          routeConfig.departureTime,
+          routeCoordinates
+        ).then((places) => {
+          if (places.length > 0) {
+            setRawRestaurants(places);
+            const safe = places.filter((p) => p.safetyStatus !== "REJECTED");
+            if (safe.length > 0) setSelectedId(safe[0].id);
+            else setSelectedId(places[0].id);
+          }
+        });
+      }
+    }
+
+    // 9. Conversational Departure Time change (e.g. "출발 시간 19:30으로 바꿔줘", "7시 출발로 변경")
+    if (routeConfig && (q.includes("출발") || q.includes("시간") || q.includes("시각"))) {
+      let newDepTime = "";
+      const matchHHMM = q.match(/(\d{1,2}):(\d{2})/);
+      if (matchHHMM) {
+        newDepTime = `${matchHHMM[1].padStart(2, "0")}:${matchHHMM[2]} 출발`;
+      } else {
+        const matchH = q.match(/(\d{1,2})\s*시/);
+        const matchM = q.match(/(\d{1,2})\s*분/);
+        if (matchH) {
+          let h = parseInt(matchH[1], 10);
+          const m = matchM ? parseInt(matchM[1], 10) : 0;
+          if ((q.includes("오후") || q.includes("저녁")) && h < 12) h += 12;
+          newDepTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} 출발`;
+        }
+      }
+      if (newDepTime) {
+        setRouteConfig((prev) => (prev ? { ...prev, departureTime: newDepTime } : prev));
+        searchCorridorRestaurants(
+          routeConfig.origin,
+          routeConfig.destination,
+          routeConfig.naturalQuery,
+          routeConfig.mode,
+          newDepTime,
+          routeCoordinates
         ).then((places) => {
           if (places.length > 0) {
             setRawRestaurants(places);
@@ -295,23 +334,28 @@ export function App() {
     setScreen("result");
     setIsTyping(true);
 
-    // 1. Instant preliminary route fetch for immediate map display (~100ms)
-    fetchRouteDirections(config.origin, config.destination)
-      .then((dirs) => {
-        setRouteCoordinates(dirs.routeCoordinates);
-        setRouteSummary({
-          duration: dirs.durationMinutes,
-          distance: dirs.distanceKm,
-        });
-      })
-      .catch((e) => console.warn("Quick directions error:", e));
+    // 1. Fetch route first, then search restaurants along that route
+    let fetchedRouteCoords: [number, number][] = [];
+    try {
+      const dirs = await fetchRouteDirections(config.origin, config.destination);
+      fetchedRouteCoords = dirs.routeCoordinates;
+      setRouteCoordinates(fetchedRouteCoords);
+      setRouteSummary({
+        duration: dirs.durationMinutes,
+        distance: dirs.distanceKm,
+      });
+    } catch (e) {
+      console.warn("Quick directions error:", e);
+    }
 
-    // 2. Instant preliminary places for IMMEDIATE card display (~150ms)
+    // 2. Instant corridor restaurants using real route coordinates for precise filtering
     searchCorridorRestaurants(
       config.origin,
       config.destination,
       config.naturalQuery,
-      config.mode
+      config.mode,
+      config.departureTime,
+      fetchedRouteCoords
     )
       .then((places) => {
         // Immediately show the cards in center screen!
@@ -330,7 +374,7 @@ export function App() {
       });
 
     // 3. Real AgentCore Bedrock Sonnet 4.5 Orchestration with all 4 tools
-    const prompt = `출발지: ${config.origin.name}, 도착지: ${config.destination.name}, 이동수단: ${config.mode}, 출발시각: ${config.departureTime}, 조건: ${userText}. plan_corridor, verify_temporal_safety, query_pinecone_reviews, rank_pareto_dining을 모두 순서대로 실행해서 최종 시공간 파레토 최적화 맛집을 브리핑해줘.`;
+    const prompt = `출발지: ${config.origin.name} (${config.origin.lat}, ${config.origin.lng}), 도착지: ${config.destination.name} (${config.destination.lat}, ${config.destination.lng}), 이동수단: ${config.mode}, 출발시각: ${config.departureTime}, 조건: ${userText}. plan_corridor, verify_temporal_safety, query_pinecone_reviews, rank_pareto_dining을 모두 순서대로 실행해서 최종 시공간 파레토 최적화 맛집을 브리핑해줘.`;
 
     const toolLabels: Record<string, string> = {
       plan_corridor: "카카오 모빌리티 실시간 경로 및 회랑 식당 탐색 중...",
@@ -354,8 +398,10 @@ export function App() {
           );
         },
         onCorridor: (payload) => {
+          // Frontend already has the user's exact route from Kakao Mobility Directions.
+          // Only update routeCoordinates if not already populated.
           if (payload.route_coordinates && payload.route_coordinates.length > 0) {
-            setRouteCoordinates(payload.route_coordinates);
+            setRouteCoordinates((prev) => (prev && prev.length >= 2 ? prev : payload.route_coordinates));
           }
           if (payload.base_duration_min) {
             setRouteSummary({
@@ -367,7 +413,12 @@ export function App() {
         onRecommendations: (payload) => {
           const candidates = payload.all_candidates || payload.top_recommendations || [];
           if (candidates.length > 0) {
-            const mapped = candidates.map(mapToRestaurant);
+            let mapped = candidates.map(mapToRestaurant);
+            // Proximity filter: keep only restaurants within 4km of the real route
+            if (fetchedRouteCoords && fetchedRouteCoords.length >= 2) {
+              const inCorridor = mapped.filter((r: Restaurant) => minDistToRoute(r.lat, r.lng, fetchedRouteCoords) <= 4000);
+              if (inCorridor.length > 0) mapped = inCorridor;
+            }
             // Smoothly update the center list with AI-verified metrics!
             setRawRestaurants(mapped);
             const firstSafe = mapped.find((r: Restaurant) => r.safetyStatus !== "REJECTED");
@@ -453,7 +504,7 @@ export function App() {
     setAgentStatusText("사용자 요청 분석 및 식당 목록 갱신 중...");
 
     const contextPrompt = routeConfig
-      ? `[현재 경로 정보: ${routeConfig.origin.name} → ${routeConfig.destination.name}, 이동수단: ${routeConfig.mode}, 출발시각: ${routeConfig.departureTime}]\n현재 추천 식당들: ${rawRestaurants.slice(0, 5).map((r) => r.name).join(", ")}\n사용자 요청: ${query}\n필요한 도구를 실행하여 최적의 추천과 답변을 한국어로 제공하고 리스트를 갱신해줘.`
+      ? `[현재 경로 정보: ${routeConfig.origin.name} (${routeConfig.origin.lat}, ${routeConfig.origin.lng}) → ${routeConfig.destination.name} (${routeConfig.destination.lat}, ${routeConfig.destination.lng}), 이동수단: ${routeConfig.mode}, 출발시각: ${routeConfig.departureTime}]\n현재 추천 식당들: ${rawRestaurants.slice(0, 5).map((r) => r.name).join(", ")}\n사용자 요청: ${query}\n필요한 도구를 실행하여 최적의 추천과 답변을 한국어로 제공하고 리스트를 갱신해줘.`
       : query;
 
     const toolLabels: Record<string, string> = {
@@ -479,7 +530,7 @@ export function App() {
         },
         onCorridor: (payload) => {
           if (payload.route_coordinates && payload.route_coordinates.length > 0) {
-            setRouteCoordinates(payload.route_coordinates);
+            setRouteCoordinates((prev) => (prev && prev.length >= 2 ? prev : payload.route_coordinates));
           }
           if (payload.base_duration_min) {
             setRouteSummary({
@@ -491,7 +542,11 @@ export function App() {
         onRecommendations: (payload) => {
           const candidates = payload.all_candidates || payload.top_recommendations || [];
           if (candidates.length > 0) {
-            const mapped = candidates.map(mapToRestaurant);
+            let mapped = candidates.map(mapToRestaurant);
+            if (routeCoordinates && routeCoordinates.length >= 2) {
+              const inCorridor = mapped.filter((r: Restaurant) => minDistToRoute(r.lat, r.lng, routeCoordinates) <= 4000);
+              if (inCorridor.length > 0) mapped = inCorridor;
+            }
             setRawRestaurants(mapped);
             const firstSafe = mapped.find((r: Restaurant) => r.safetyStatus !== "REJECTED");
             if (firstSafe) {

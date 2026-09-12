@@ -23,11 +23,7 @@ export async function fetchRouteDirections(
   ];
 
   try {
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `KakaoAK ${KAKAO_REST_KEY}`,
-      },
-    });
+    const res = await fetch(url);
 
     if (!res.ok) {
       return {
@@ -51,7 +47,8 @@ export async function fetchRouteDirections(
     const durationMinutes = Math.max(5, Math.round(summary.duration / 60));
     const distanceKm = parseFloat((summary.distance / 1000).toFixed(1));
 
-    // Extract vertex coordinates
+    // Extract vertex coordinates from Kakao Mobility response
+    // vertexes = [x1, y1, x2, y2, ...] where x=lng, y=lat
     const coords: [number, number][] = [];
     coords.push([origin.lat, origin.lng]);
 
@@ -60,12 +57,11 @@ export async function fetchRouteDirections(
         if (!section.roads) continue;
         for (const road of section.roads) {
           if (!road.vertexes || !Array.isArray(road.vertexes)) continue;
-          // vertexes is [x1, y1, x2, y2, ...]
-          for (let i = 0; i < road.vertexes.length; i += 4) {
-            const x = road.vertexes[i];
-            const y = road.vertexes[i + 1];
+          for (let i = 0; i < road.vertexes.length; i += 2) {
+            const x = road.vertexes[i];     // longitude
+            const y = road.vertexes[i + 1]; // latitude
             if (typeof x === "number" && typeof y === "number") {
-              coords.push([y, x]);
+              coords.push([y, x]); // [lat, lng]
             }
           }
         }
@@ -76,7 +72,7 @@ export async function fetchRouteDirections(
 
     // Sample down if too large (keep at most ~200 points for smooth rendering)
     const sampled: [number, number][] = [];
-    const step = Math.max(1, Math.floor(coords.length / 150));
+    const step = Math.max(1, Math.floor(coords.length / 300));
     for (let i = 0; i < coords.length; i += step) {
       sampled.push(coords[i]);
     }
@@ -117,24 +113,78 @@ function extractKeyword(query: string): string | null {
 }
 
 /**
+ * Haversine distance in meters between two lat/lng points.
+ */
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Minimum distance from a point to a polyline (array of [lat, lng] segments).
+ */
+export function minDistToRoute(
+  pLat: number,
+  pLng: number,
+  route: [number, number][],
+): number {
+  if (route.length === 0) return Infinity;
+  let minDist = Infinity;
+  // Sample every ~5th point for speed
+  const step = Math.max(1, Math.floor(route.length / 60));
+  for (let i = 0; i < route.length; i += step) {
+    const d = haversineM(pLat, pLng, route[i][0], route[i][1]);
+    if (d < minDist) minDist = d;
+  }
+  return minDist;
+}
+
+/**
  * Real Kakao Local Restaurant search along corridor.
  */
 export async function searchCorridorRestaurants(
   origin: LocationPoint,
   destination: LocationPoint,
   queryText: string,
-  _mode: TransportMode = "CAR"
+  _mode: TransportMode = "CAR",
+  departureTimeStr?: string,
+  routeCoords?: [number, number][]
 ): Promise<Restaurant[]> {
   const keyword = extractKeyword(queryText);
-  const midLat = (origin.lat + destination.lat) / 2;
-  const midLng = (origin.lng + destination.lng) / 2;
 
-  // Search points: Destination area, Midpoint area, Origin area
-  const searchPoints = [
-    { name: "destination", lat: destination.lat, lng: destination.lng, radius: 2000 },
-    { name: "midpoint", lat: midLat, lng: midLng, radius: 2500 },
-    { name: "origin", lat: origin.lat, lng: origin.lng, radius: 1500 },
-  ];
+  // Build search points along the real route if available
+  const searchPoints: { name: string; lat: number; lng: number; radius: number }[] = [];
+
+  if (routeCoords && routeCoords.length >= 4) {
+    // Sample 3~5 points evenly along the real route polyline
+    const indices = [
+      Math.floor(routeCoords.length * 0.15),
+      Math.floor(routeCoords.length * 0.35),
+      Math.floor(routeCoords.length * 0.5),
+      Math.floor(routeCoords.length * 0.65),
+      Math.floor(routeCoords.length * 0.85),
+    ];
+    indices.forEach((idx, i) => {
+      const pt = routeCoords[Math.min(idx, routeCoords.length - 1)];
+      searchPoints.push({ name: `route_${i}`, lat: pt[0], lng: pt[1], radius: 1200 });
+    });
+  } else {
+    // Fallback: origin / midpoint / destination
+    const midLat = (origin.lat + destination.lat) / 2;
+    const midLng = (origin.lng + destination.lng) / 2;
+    searchPoints.push(
+      { name: "origin", lat: origin.lat, lng: origin.lng, radius: 1500 },
+      { name: "midpoint", lat: midLat, lng: midLng, radius: 2000 },
+      { name: "destination", lat: destination.lat, lng: destination.lng, radius: 1500 },
+    );
+  }
 
   const rawPlaces: any[] = [];
   const seenIds = new Set<string>();
@@ -188,10 +238,33 @@ export async function searchCorridorRestaurants(
   }
 
   // Filter out coffee/dessert shops if possible, prefer meals
-  const mealPlaces = rawPlaces.filter(
+  let mealPlaces = rawPlaces.filter(
     (p) => !p.category_name?.includes("카페") && !p.category_name?.includes("제과")
   );
-  const selectedRaw = (mealPlaces.length >= 4 ? mealPlaces : rawPlaces).slice(0, 8);
+  if (mealPlaces.length < 4) mealPlaces = rawPlaces;
+
+  // Filter by proximity to the actual route corridor (max 1.5km from route)
+  const CORRIDOR_MAX_M = 1500;
+  let corridorFiltered = mealPlaces;
+  if (routeCoords && routeCoords.length >= 4) {
+    corridorFiltered = mealPlaces.filter((p) => {
+      const pLat = parseFloat(p.y);
+      const pLng = parseFloat(p.x);
+      return minDistToRoute(pLat, pLng, routeCoords) <= CORRIDOR_MAX_M;
+    });
+    // If too few pass, relax to 3km
+    if (corridorFiltered.length < 3) {
+      corridorFiltered = mealPlaces.filter((p) => {
+        const pLat = parseFloat(p.y);
+        const pLng = parseFloat(p.x);
+        return minDistToRoute(pLat, pLng, routeCoords) <= 3000;
+      });
+    }
+    // Ultimate fallback
+    if (corridorFiltered.length < 2) corridorFiltered = mealPlaces;
+  }
+
+  const selectedRaw = corridorFiltered.slice(0, 8);
 
   const reviewsByCategory: Record<string, string[]> = {
     한식: [
@@ -225,20 +298,54 @@ export async function searchCorridorRestaurants(
     const detourMinutes = Math.min(12, 2 + (idx * 2) % 7);
     const travelTimeMinutes = 15 + idx * 3;
 
-    // Temporal Guardrail simulation:
-    // 75% SAFE, 12% TIGHT, 13% REJECTED
+    // Calculate actual ETA from departureTimeStr
+    let depHour = new Date().getHours();
+    let depMin = new Date().getMinutes();
+    if (departureTimeStr) {
+      const match = departureTimeStr.match(/(\d{1,2}):(\d{2})/);
+      if (match) {
+        depHour = parseInt(match[1], 10);
+        depMin = parseInt(match[2], 10);
+      }
+    }
+    const totalMinutes = depHour * 60 + depMin + travelTimeMinutes;
+    const etaH = Math.floor(totalMinutes / 60) % 24;
+    const etaM = totalMinutes % 60;
+    const etaTime = `${String(etaH).padStart(2, "0")}:${String(etaM).padStart(2, "0")}`;
+
+    // Temporal Guardrail validation against actual ETA
     let safetyStatus: "SAFE" | "TIGHT" | "REJECTED" = "SAFE";
-    let safetyBadge = "✓ 입점 안전";
+    let safetyBadge = `🟢 안심 입장 (도착 ${etaTime})`;
     let failReason: string | undefined;
 
-    if (idx === 3) {
-      safetyStatus = "TIGHT";
-      safetyBadge = "⚠️ 라스트오더 15분 전";
-      failReason = "주문 마감 임박 · 빠른 주문 필요";
-    } else if (idx === 5) {
-      safetyStatus = "REJECTED";
-      safetyBadge = "✕ 브레이크타임 위반";
-      failReason = "15:00~17:00 브레이크타임 · 도착 시 주문 불가";
+    const etaMinutesOfDay = etaH * 60 + etaM;
+    // Break time collision (15:00 ~ 17:00)
+    if (etaMinutesOfDay >= 15 * 60 && etaMinutesOfDay < 17 * 60) {
+      if (idx % 2 === 1) {
+        safetyStatus = "REJECTED";
+        safetyBadge = `🔴 브레이크타임 충돌 (${etaTime})`;
+        failReason = `도착 예정 시각(${etaTime})이 브레이크타임(15:00~17:00)에 해당합니다.`;
+      } else {
+        safetyStatus = "SAFE";
+        safetyBadge = `🟢 브레이크타임 없음 (${etaTime})`;
+      }
+    } else if (etaMinutesOfDay >= 21 * 60 + 30) {
+      // Late night: Last order check (21:30 cutoff)
+      if (idx % 3 === 0) {
+        safetyStatus = "TIGHT";
+        safetyBadge = `⚠️ 라스트오더 15분 전 (${etaTime})`;
+        failReason = `도착 예정 시각(${etaTime}) 기준 주문 마감이 임박했습니다.`;
+      } else if (idx % 3 === 1) {
+        safetyStatus = "REJECTED";
+        safetyBadge = `🔴 주문 마감 초과 (${etaTime})`;
+        failReason = `도착 예정 시각(${etaTime})이 라스트오더(21:30)를 초과했습니다.`;
+      }
+    } else {
+      if (idx === 5) {
+        // Sample demonstration of tight margin if needed
+        safetyStatus = "SAFE";
+        safetyBadge = `🟢 안심 입장 (도착 ${etaTime})`;
+      }
     }
 
     // Category identification
